@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador do Efeito Doppler - Ambulância</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #090d16;
+            color: #f1f5f9;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            touch-action: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col justify-between p-4 antialiased">
+
+    <!-- Cabeçalho Simplificado -->
+    <header class="flex justify-between items-center max-w-5xl w-full mx-auto py-2">
+        <div class="flex items-center space-x-3">
+            <div class="p-2 bg-red-500/20 text-red-500 rounded-lg border border-red-500/30">
+                <i class="fa-solid fa-truck-medical text-xl animate-pulse"></i>
+            </div>
+            <h1 class="text-xl font-bold text-slate-100">
+                Efeito Doppler <span class="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded-full border border-blue-500/30 font-normal ml-2">Ambulância</span>
+            </h1>
+        </div>
+
+        <!-- Botão de Áudio -->
+        <button id="btnAudioToggle" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium text-sm flex items-center gap-2 transition-all shadow-lg shadow-emerald-900/30">
+            <i class="fa-solid fa-volume-high" id="audioIcon"></i>
+            <span id="audioBtnText">Ativar Áudio da Sirene</span>
+        </button>
+    </header>
+
+    <!-- Área Principal da Animação -->
+    <main class="flex-grow flex items-center justify-center max-w-5xl w-full mx-auto my-2">
+        <div class="relative w-full h-full max-h-[550px] bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+            
+            <!-- Legenda -->
+            <div class="absolute top-4 left-4 z-10 flex flex-wrap gap-2 pointer-events-none">
+                <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-300 flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+                    <span>Ambulância Emissora</span>
+                </div>
+                <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-300 flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                    <span>Observador (Arraste para mover)</span>
+                </div>
+            </div>
+
+            <canvas id="dopplerCanvas" class="w-full h-full bg-slate-950 block"></canvas>
+
+            <!-- Controles Mínimos da Animação (Parar Ambulância / Play / Pause / Reset) -->
+            <div class="absolute bottom-4 right-4 z-10 flex items-center gap-2">
+                <button id="btnToggleMove" class="px-3.5 h-10 bg-amber-600 hover:bg-amber-500 text-white rounded-xl flex items-center justify-center text-xs font-semibold gap-2 transition-all shadow-lg shadow-amber-900/30" title="Parar/Mover Ambulância">
+                    <i class="fa-solid fa-hand" id="moveIcon"></i>
+                    <span id="moveBtnText">Parar Ambulância</span>
+                </button>
+                <button id="btnPlayPause" class="w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded-xl flex items-center justify-center text-sm transition-all shadow-lg shadow-blue-900/30" title="Pausar / Iniciar Simulação">
+                    <i class="fa-solid fa-pause" id="playIcon"></i>
+                </button>
+                <button id="btnReset" class="w-10 h-10 bg-slate-800/90 hover:bg-slate-700 backdrop-blur-md text-slate-300 rounded-xl flex items-center justify-center text-sm transition-all border border-slate-700" title="Reiniciar Posição">
+                    <i class="fa-solid fa-rotate-left"></i>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Rodapé Limpo -->
+    <footer class="text-center py-2 text-xs text-slate-500">
+        Simulador do Efeito Doppler • Arraste o observador para alterar a posição sonora
+    </footer>
+
+    <script>
+        // Estado básico da animação
+        const state = {
+            isRunning: true,
+            isAmbulanceMoving: true, // Controle de movimento da ambulância
+            audioEnabled: false,
+            soundSpeed: 343, // m/s
+            ambulanceSpeedKmH: 90, // km/h fixo
+            baseFrequency: 700, // Hz fixo
+            
+            // Posições
+            ambulance: { x: -100, y: 0 },
+            observer: { x: 0, y: 0 },
+            
+            // Frentes de onda
+            waves: [],
+            waveSpawnInterval: 8,
+            frameCount: 0,
+
+            // Web Audio API
+            audioCtx: null,
+            oscillator: null,
+            oscillator2: null,
+            filterNode: null,
+            pannerNode: null,
+            gainNode: null,
+            sirenTimer: 0
+        };
+
+        // DOM
+        const canvas = document.getElementById('dopplerCanvas');
+        const ctx = canvas.getContext('2d');
+        const btnAudioToggle = document.getElementById('btnAudioToggle');
+        const audioIcon = document.getElementById('audioIcon');
+        const audioBtnText = document.getElementById('audioBtnText');
+        const btnPlayPause = document.getElementById('btnPlayPause');
+        const playIcon = document.getElementById('playIcon');
+        const btnReset = document.getElementById('btnReset');
+        const btnToggleMove = document.getElementById('btnToggleMove');
+        const moveIcon = document.getElementById('moveIcon');
+        const moveBtnText = document.getElementById('moveBtnText');
+
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+
+            if (state.ambulance.y === 0) {
+                resetPositions();
+            }
+        }
+
+        function resetPositions() {
+            state.ambulance.x = -100;
+            state.ambulance.y = canvas.height / 2;
+            state.observer.x = canvas.width / 2;
+            state.observer.y = canvas.height / 2 - 80;
+            state.waves = [];
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // Inicializador do Sistema de Som
+        function initAudio() {
+            if (!state.audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                state.audioCtx = new AudioContext();
+
+                // Controle de Volume
+                state.gainNode = state.audioCtx.createGain();
+                state.gainNode.gain.setValueAtTime(0.15, state.audioCtx.currentTime);
+
+                // Filtro para Atenuação de Distância (Passa-Baixas)
+                state.filterNode = state.audioCtx.createBiquadFilter();
+                state.filterNode.type = 'lowpass';
+                state.filterNode.frequency.setValueAtTime(10000, state.audioCtx.currentTime);
+
+                // Panner Estéreo
+                if (state.audioCtx.createStereoPanner) {
+                    state.pannerNode = state.audioCtx.createStereoPanner();
+                    state.pannerNode.pan.setValueAtTime(0, state.audioCtx.currentTime);
+                }
+
+                // Conexões
+                let lastNode = state.filterNode;
+                if (state.pannerNode) {
+                    state.filterNode.connect(state.pannerNode);
+                    lastNode = state.pannerNode;
+                }
+                lastNode.connect(state.gainNode);
+                state.gainNode.connect(state.audioCtx.destination);
+
+                // Oscilador Principal
+                state.oscillator = state.audioCtx.createOscillator();
+                state.oscillator.type = 'sawtooth';
+                state.oscillator.frequency.setValueAtTime(state.baseFrequency, state.audioCtx.currentTime);
+                state.oscillator.connect(state.filterNode);
+                state.oscillator.start();
+
+                // Oscilador Harmônico
+                state.oscillator2 = state.audioCtx.createOscillator();
+                state.oscillator2.type = 'sine';
+                state.oscillator2.frequency.setValueAtTime(state.baseFrequency * 1.5, state.audioCtx.currentTime);
+                
+                const gain2 = state.audioCtx.createGain();
+                gain2.gain.setValueAtTime(0.08, state.audioCtx.currentTime);
+                state.oscillator2.connect(gain2);
+                gain2.connect(state.filterNode);
+                state.oscillator2.start();
+            }
+
+            if (state.audioCtx.state === 'suspended') {
+                state.audioCtx.resume();
+            }
+        }
+
+        function toggleAudio() {
+            if (!state.audioEnabled) {
+                initAudio();
+                state.audioEnabled = true;
+                btnAudioToggle.classList.remove('bg-emerald-600', 'hover:bg-emerald-500');
+                btnAudioToggle.classList.add('bg-red-600', 'hover:bg-red-500');
+                audioIcon.className = 'fa-solid fa-volume-xmark';
+                audioBtnText.textContent = 'Silenciar Sirene';
+            } else {
+                if (state.gainNode) {
+                    state.gainNode.gain.setValueAtTime(0, state.audioCtx.currentTime);
+                }
+                state.audioEnabled = false;
+                btnAudioToggle.classList.remove('bg-red-600', 'hover:bg-red-500');
+                btnAudioToggle.classList.add('bg-emerald-600', 'hover:bg-emerald-500');
+                audioIcon.className = 'fa-solid fa-volume-high';
+                audioBtnText.textContent = 'Ativar Áudio da Sirene';
+            }
+        }
+
+        btnAudioToggle.addEventListener('click', toggleAudio);
+
+        // Cálculo da Frequência do Efeito Doppler e Distância
+        function updateAudioState() {
+            const metersPerPixel = 0.25;
+            // Velocidade zero se a ambulância estiver parada
+            const ambulanceVelocityMs = state.isAmbulanceMoving ? (state.ambulanceSpeedKmH / 3.6) : 0;
+
+            const dx = state.observer.x - state.ambulance.x;
+            const dy = state.observer.y - state.ambulance.y;
+            const distancePixels = Math.sqrt(dx * dx + dy * dy);
+            const distanceMeters = Math.max(1, distancePixels * metersPerPixel);
+
+            const ux = dx / (distancePixels || 1);
+            const vSourceApproaching = ambulanceVelocityMs * ux; 
+
+            // Sirene Bitonal
+            state.sirenTimer += 0.016;
+            let rawSirenFreq = state.baseFrequency;
+            if (Math.floor(state.sirenTimer * 3) % 2 === 0) {
+                rawSirenFreq = state.baseFrequency * 1.25;
+            } else {
+                rawSirenFreq = state.baseFrequency * 0.9;
+            }
+
+            // Equação Doppler
+            const dopplerFactor = state.soundSpeed / (state.soundSpeed - vSourceApproaching);
+            const observedFreq = rawSirenFreq * dopplerFactor;
+
+            // Ajustes Sonoros baseados em Distância e Posição
+            const refDist = 15;
+            const volumeGainFactor = Math.min(1.0, refDist / (refDist + (distanceMeters - refDist) * 0.7));
+            const targetVolume = Math.max(0.005, Math.min(0.3, volumeGainFactor * 0.28));
+
+            // Filtro Passa-Baixas (Abafamento do Ar)
+            const maxCutoff = 12000;
+            const minCutoff = 700;
+            const distRatio = Math.min(1.0, (distanceMeters - 5) / 145);
+            const cutoffFreq = Math.max(minCutoff, maxCutoff * Math.pow(minCutoff / maxCutoff, Math.max(0, distRatio)));
+
+            // Panner Estéreo
+            const screenCenterX = canvas.width / 2;
+            const panValue = Math.max(-1, Math.min(1, (state.ambulance.x - state.observer.x) / (screenCenterX || 1)));
+
+            // Aplicação no Nó do Web Audio API
+            if (state.audioEnabled && state.audioCtx && state.oscillator) {
+                state.gainNode.gain.setTargetAtTime(targetVolume, state.audioCtx.currentTime, 0.04);
+
+                if (state.filterNode) {
+                    state.filterNode.frequency.setTargetAtTime(cutoffFreq, state.audioCtx.currentTime, 0.04);
+                }
+
+                if (state.pannerNode) {
+                    state.pannerNode.pan.setTargetAtTime(panValue, state.audioCtx.currentTime, 0.04);
+                }
+
+                state.oscillator.frequency.setTargetAtTime(observedFreq, state.audioCtx.currentTime, 0.03);
+                if (state.oscillator2) {
+                    state.oscillator2.frequency.setTargetAtTime(observedFreq * 1.4, state.audioCtx.currentTime, 0.03);
+                }
+            }
+        }
+
+        // Desenhar Ambulância
+        function drawAmbulance(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Chassi
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.roundRect(-24, -14, 48, 28, 4);
+            ctx.fill();
+
+            // Faixa Vermelha
+            ctx.fillStyle = '#ef4444';
+            ctx.fillRect(-24, -2, 48, 6);
+
+            // Cruz Médica
+            ctx.fillStyle = '#ef4444';
+            ctx.fillRect(4, -8, 8, 2.5);
+            ctx.fillRect(6.75, -10.75, 2.5, 8);
+
+            // Vidros
+            ctx.fillStyle = '#334155';
+            ctx.fillRect(10, -11, 10, 8);
+            ctx.fillRect(-10, -11, 8, 6);
+
+            // Rodas
+            ctx.fillStyle = '#0f172a';
+            ctx.beginPath();
+            ctx.arc(-14, 14, 5, 0, Math.PI * 2);
+            ctx.arc(14, 14, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Giroflex (Sirene)
+            const flash = Math.floor(Date.now() / 150) % 2 === 0;
+            ctx.fillStyle = flash ? '#ef4444' : '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(0, -16, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = flash ? 'rgba(239, 68, 68, 0.35)' : 'rgba(59, 130, 246, 0.35)';
+            ctx.beginPath();
+            ctx.arc(0, -16, 14, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        // Desenhar Observador
+        function drawObserver(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            ctx.strokeStyle = 'rgba(52, 211, 153, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, 18, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(0, -8, 7, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(0, 8, 10, Math.PI, 0);
+            ctx.fill();
+
+            ctx.fillStyle = '#6ee7b7';
+            ctx.font = '11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Observador', 0, 28);
+
+            ctx.restore();
+        }
+
+        // Loop Principal de Animação
+        function animate() {
+            ctx.fillStyle = '#090d16';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Desenhar Pista
+            const roadY = canvas.height / 2;
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(0, roadY - 25, canvas.width, 50);
+
+            ctx.strokeStyle = '#475569';
+            ctx.setLineDash([20, 15]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, roadY);
+            ctx.lineTo(canvas.width, roadY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Linha Guia do Som
+            ctx.strokeStyle = 'rgba(100, 116, 139, 0.2)';
+            ctx.setLineDash([4, 6]);
+            ctx.beginPath();
+            ctx.moveTo(state.ambulance.x, state.ambulance.y);
+            ctx.lineTo(state.observer.x, state.observer.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Movimento da Ambulância e emissão de ondas
+            if (state.isRunning) {
+                // Apenas altera a posição da ambulância se ela estiver em movimento
+                if (state.isAmbulanceMoving) {
+                    const speedPxPerFrame = (state.ambulanceSpeedKmH / 90) * 3.2;
+                    state.ambulance.x += speedPxPerFrame;
+
+                    if (state.ambulance.x > canvas.width + 120) {
+                        state.ambulance.x = -120;
+                        state.waves = [];
+                    }
+                }
+
+                // Gerar Frentes de Onda emitidas a partir do giroflex/sirene (mesmo com ambulância parada)
+                state.frameCount++;
+                if (state.frameCount % state.waveSpawnInterval === 0) {
+                    state.waves.push({
+                        x: state.ambulance.x,
+                        y: state.ambulance.y - 16, // Origem direta no giroflex
+                        radius: 0,
+                        alpha: 0.85
+                    });
+                }
+            }
+
+            // Expansão das ondas no meio
+            const waveExpansionSpeed = 4.2;
+
+            for (let i = state.waves.length - 1; i >= 0; i--) {
+                const wave = state.waves[i];
+
+                if (state.isRunning) {
+                    wave.radius += waveExpansionSpeed;
+                    wave.alpha -= 0.004; // Atenuação gradual
+                }
+
+                if (wave.alpha <= 0 || wave.radius > canvas.width * 1.2) {
+                    state.waves.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(wave.x, wave.y, wave.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(56, 189, 248, ${wave.alpha})`;
+                ctx.lineWidth = 1.8;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Renderizar Elementos
+            drawObserver(state.observer.x, state.observer.y);
+            drawAmbulance(state.ambulance.x, state.ambulance.y);
+
+            // Atualizar física de som
+            updateAudioState();
+
+            requestAnimationFrame(animate);
+        }
+
+        // Alternar entre Mover e Parar Ambulância
+        btnToggleMove.addEventListener('click', () => {
+            state.isAmbulanceMoving = !state.isAmbulanceMoving;
+            if (state.isAmbulanceMoving) {
+                btnToggleMove.classList.remove('bg-emerald-600', 'hover:bg-emerald-500', 'shadow-emerald-900/30');
+                btnToggleMove.classList.add('bg-amber-600', 'hover:bg-amber-500', 'shadow-amber-900/30');
+                moveIcon.className = 'fa-solid fa-hand';
+                moveBtnText.textContent = 'Parar Ambulância';
+            } else {
+                btnToggleMove.classList.remove('bg-amber-600', 'hover:bg-amber-500', 'shadow-amber-900/30');
+                btnToggleMove.classList.add('bg-emerald-600', 'hover:bg-emerald-500', 'shadow-emerald-900/30');
+                moveIcon.className = 'fa-solid fa-truck-fast';
+                moveBtnText.textContent = 'Mover Ambulância';
+            }
+        });
+
+        // Interações dos Botões
+        btnPlayPause.addEventListener('click', () => {
+            state.isRunning = !state.isRunning;
+            playIcon.className = state.isRunning ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+        });
+
+        btnReset.addEventListener('click', () => {
+            resetPositions();
+        });
+
+        // Arraste do Observador
+        let isDraggingObserver = false;
+
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const pos = getMousePos(e);
+            const dx = pos.x - state.observer.x;
+            const dy = pos.y - state.observer.y;
+            if (Math.sqrt(dx * dx + dy * dy) < 35) {
+                isDraggingObserver = true;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDraggingObserver) {
+                const pos = getMousePos(e);
+                state.observer.x = Math.max(20, Math.min(canvas.width - 20, pos.x));
+                state.observer.y = Math.max(20, Math.min(canvas.height - 20, pos.y));
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDraggingObserver = false;
+        });
+
+        canvas.addEventListener('touchstart', (e) => {
+            const pos = getMousePos(e);
+            const dx = pos.x - state.observer.x;
+            const dy = pos.y - state.observer.y;
+            if (Math.sqrt(dx * dx + dy * dy) < 45) {
+                isDraggingObserver = true;
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (isDraggingObserver) {
+                const pos = getMousePos(e);
+                state.observer.x = Math.max(20, Math.min(canvas.width - 20, pos.x));
+                state.observer.y = Math.max(20, Math.min(canvas.height - 20, pos.y));
+            }
+        });
+
+        window.addEventListener('touchend', () => {
+            isDraggingObserver = false;
+        });
+
+        // Iniciar
+        window.onload = () => {
+            resizeCanvas();
+            animate();
+        };
+    </script>
+</body>
+</html>
